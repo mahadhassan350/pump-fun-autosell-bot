@@ -9,28 +9,29 @@ import os
 from datetime import datetime
 from time import monotonic
 
-import uvloop
+# Remove uvloop for Windows compatibility
+# import uvloop
+# asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
 from solders.pubkey import Pubkey
 
-from cleanup.modes import (
+from src.cleanup.modes import (
     handle_cleanup_after_failure,
     handle_cleanup_after_sell,
     handle_cleanup_post_session,
 )
-from core.client import SolanaClient
-from core.curve import BondingCurveManager
-from core.priority_fee.manager import PriorityFeeManager
-from core.pubkeys import PumpAddresses
-from core.wallet import Wallet
-from monitoring.block_listener import BlockListener
-from monitoring.geyser_listener import GeyserListener
-from monitoring.logs_listener import LogsListener
-from trading.base import TokenInfo, TradeResult
-from trading.buyer import TokenBuyer
-from trading.seller import TokenSeller
-from utils.logger import get_logger
-
-asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+from src.core.client import SolanaClient
+from src.core.curve import BondingCurveManager
+from src.core.priority_fee.manager import PriorityFeeManager
+from src.core.pubkeys import PumpAddresses
+from src.core.wallet import Wallet
+from src.monitoring.block_listener import BlockListener
+from src.monitoring.geyser_listener import GeyserListener
+from src.monitoring.logs_listener import LogsListener
+from src.trading.base import TokenInfo, TradeResult
+from src.trading.buyer import TokenBuyer
+from src.trading.seller import TokenSeller
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -420,57 +421,62 @@ class PumpTrader:
     async def _handle_successful_buy(
         self, token_info: TokenInfo, buy_result: TradeResult
     ) -> None:
-        """Handle successful token purchase.
-        
+        """Handle successful buy operation.
+
         Args:
             token_info: Token information
-            buy_result: The result of the buy operation
+            buy_result: Result of the buy operation
         """
-        logger.info(f"Successfully bought {token_info.symbol}")
+        logger.info(
+            f"Holding {token_info.name} ({token_info.symbol}) for {self.wait_time_after_buy} seconds"
+        )
+        
+        # Log the trade
         self._log_trade(
-            "buy",
+            "BUY",
             token_info,
-            buy_result.price,  # type: ignore
-            buy_result.amount,  # type: ignore
+            buy_result.price,
+            buy_result.amount,
             buy_result.tx_signature,
         )
-        self.traded_mints.add(token_info.mint)
         
-        # Sell token if not in marry mode
-        if not self.marry_mode:
-            logger.info(
-                f"Waiting for {self.wait_time_after_buy} seconds before selling..."
+        # Save token info for later reference
+        await self._save_token_info(token_info)
+        
+        # Wait for the configured amount of time after buy
+        await asyncio.sleep(self.wait_time_after_buy)
+        
+        # If marry_mode is enabled, skip selling
+        if self.marry_mode:
+            logger.info(f"Marry mode enabled - skipping sell for {token_info.name}")
+            return
+
+        # Attempt to sell the token
+        logger.info(f"Selling {token_info.name} ({token_info.symbol})")
+        sell_result = await self.seller.execute(token_info)
+        
+        if sell_result.success:
+            logger.info(f"Sold {token_info.name} successfully")
+            self._log_trade(
+                "SELL",
+                token_info,
+                sell_result.price,
+                sell_result.amount,
+                sell_result.tx_signature,
             )
-            await asyncio.sleep(self.wait_time_after_buy)
-
-            logger.info(f"Selling {token_info.symbol}...")
-            sell_result: TradeResult = await self.seller.execute(token_info)
-
-            if sell_result.success:
-                logger.info(f"Successfully sold {token_info.symbol}")
-                self._log_trade(
-                    "sell",
-                    token_info,
-                    sell_result.price,  # type: ignore
-                    sell_result.amount,  # type: ignore
-                    sell_result.tx_signature,
-                )
-                # Close ATA if enabled
+            
+            if self.cleanup_mode == "after_sell":
+                # Perform cleanup after successful sell
+                logger.info(f"Performing account cleanup after selling {token_info.name}")
                 await handle_cleanup_after_sell(
-                    self.solana_client, 
-                    self.wallet, 
-                    token_info.mint, 
-                    self.priority_fee_manager,
-                    self.cleanup_mode,
-                    self.cleanup_with_priority_fee,
-                    self.cleanup_force_close_with_burn
-                )
-            else:
-                logger.error(
-                    f"Failed to sell {token_info.symbol}: {sell_result.error_message}"
+                    self.solana_client,
+                    self.wallet,
+                    token_info,
+                    priority_fee_enabled=self.cleanup_with_priority_fee,
+                    priority_fee_manager=self.priority_fee_manager,
                 )
         else:
-            logger.info("Marry mode enabled. Skipping sell operation.")
+            logger.error(f"Failed to sell {token_info.name}: {sell_result.error_message}")
 
     async def _handle_failed_buy(
         self, token_info: TokenInfo, buy_result: TradeResult

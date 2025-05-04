@@ -1,0 +1,54 @@
+# Auto-Sell Bot Configuration
+# This bot detects your transactions on pump.fun and automatically sells after a 3-second delay
+
+# Bot identification and connection settings
+name: "auto-sell-bot"
+env_file: ".env"
+rpc_endpoint: "${SOLANA_NODE_RPC_ENDPOINT}"
+wss_endpoint: "${SOLANA_NODE_WSS_ENDPOINT}"
+private_key: "${SOLANA_PRIVATE_KEY}"
+
+enabled: true
+separate_process: true
+
+# Trading parameters
+trade:
+  buy_amount: 0.0001 # Amount of SOL to spend when buying (in SOL)
+  buy_slippage: 0.3 # Maximum acceptable price deviation (0.3 = 30%)
+  sell_slippage: 0.3
+  extreme_fast_mode: false
+
+# Priority fee configuration
+priority_fees:
+  enable_dynamic: false
+  enable_fixed: true
+  fixed_amount: 1_000_000
+  extra_percentage: 0.0
+  hard_cap: 1_000_000
+
+# Filters for token selection
+filters:
+  match_string: null
+  # Use your public wallet address here
+  bro_address: null  # Set to null to detect all new tokens
+  listener_type: "logs"
+  max_token_age: 30  # More lenient to catch your transactions
+  marry_mode: false
+  yolo_mode: true    # Continuously monitor for transactions
+
+# Retry and timeout settings
+retries:
+  max_attempts: 3
+  wait_after_creation: 15
+  wait_after_buy: 3   # This is the key setting - wait 3 seconds after buying before selling
+  wait_before_new_token: 5
+
+# Token and account management
+cleanup:
+  mode: "after_sell"
+  force_close_with_burn: false
+  with_priority_fee: true
+
+# Node provider configuration
+node:
+  max_rps: 25 
